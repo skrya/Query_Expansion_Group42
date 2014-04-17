@@ -1,0 +1,410 @@
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileReader;
+import java.io.InputStreamReader;
+import java.lang.reflect.Array;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.Map;
+import java.util.TreeMap;
+
+import org.apache.lucene.analysis.Analyzer;
+import org.apache.lucene.analysis.standard.StandardAnalyzer;
+import org.apache.lucene.document.Document;
+import org.apache.lucene.index.DirectoryReader;
+import org.apache.lucene.index.IndexReader;
+import org.apache.lucene.queryparser.classic.QueryParser;
+import org.apache.lucene.search.BooleanClause;
+import org.apache.lucene.search.BooleanQuery;
+import org.apache.lucene.search.IndexSearcher;
+import org.apache.lucene.search.Query;
+import org.apache.lucene.search.ScoreDoc;
+import org.apache.lucene.search.TopScoreDocCollector;
+import org.apache.lucene.store.FSDirectory;
+import org.apache.lucene.util.Version;
+import org.json.simple.JSONArray;
+import org.json.simple.JSONObject;
+
+public class Reader
+{
+	private static StandardAnalyzer analyzer = new StandardAnalyzer(Version.LUCENE_42);
+	private String synonymStr = new String();
+	private ArrayList<String> arrSynStr = null;
+	
+	public  void setSynonymStr(String synonymStr)
+	{
+		this.synonymStr = synonymStr;
+	}
+
+	public String getSynonymStr()
+	{
+		return synonymStr;
+	}
+
+	public static void main(String args[]) throws Exception
+	{
+		//TODO: query reweighting, tf-idf, remove words having same stem/morphological form, use synsets, real time feedback
+		//TODO 1: Acronyms, Synnonyms, Add 1,2,3,... in stopwords
+		//TODO Add Stopword list to vcluster
+		//String indexLocation = "/media/9EAEE08CAEE05DF1/Yr 1 Sem 2/IRE/Major Project/indexFiles/";
+		Reader r = new Reader();
+		r.queryExpansion();
+	}
+	
+	public void queryExpansion() throws Exception{
+		IndexReader reader = DirectoryReader.open(FSDirectory.open(new File(Constants.PATH_OF_SEARCH_INDEX_FILES)));
+		  IndexSearcher searcher = new IndexSearcher(reader);
+		  
+		  String s = "";
+		  BufferedReader br = new BufferedReader(
+		          new InputStreamReader(System.in));
+		  
+		  //Query Taken here.
+		  
+		  Map<String, Integer> nameToIDMapping = new HashMap<String, Integer>();
+			BufferedReader mappingFile = new BufferedReader(new FileReader(new File(Constants.PATH_OF_MAPPING_FILE)));
+			String line;
+			while((line = mappingFile.readLine())!= null)
+			{
+				String[] parts = line.split(",");
+				int num = Integer.parseInt(parts[0]);
+				nameToIDMapping.put(parts[1], num);
+			}
+			//id to m=name is stored in a map (nametoIDmapping)
+			
+			//load clusters
+			ArrayList<Integer> docIdToClusterNumber = new ArrayList<Integer>();
+			
+			//TODO : Check whether clusterNoToDocId is required
+			
+			docIdToClusterNumber.add(new Integer(-1));
+			
+			BufferedReader brCluster = new BufferedReader(new FileReader(new File(Constants.PATH_OF_CLUSTER_FILE)));
+			line="";
+			int i = 1;
+			while((line=brCluster.readLine())!=null)
+			{
+				Integer clusterNumber = Integer.parseInt(line);
+				
+					docIdToClusterNumber.add(clusterNumber);
+		/*		ArrayList<Integer> arr = clusterNoToDocId.get(clusterNumber);
+				if(arr!=null)
+				{
+				    arr.add(i);
+					clusterNoToDocId.put(clusterNumber, arr);
+				}
+				else{
+					arr = new ArrayList<Integer>();
+					arr.add(i);
+					clusterNoToDocId.put(clusterNumber, arr);
+				}*/
+				i++;
+			}
+			brCluster.close();
+			
+			//From path_of_cluster_file dociDtoClusterNumber is mapped.
+			
+			HashMap<Integer,ArrayList<String> > clusterToTerms = new HashMap<Integer, ArrayList<String> >();
+			BufferedReader brClusterTerms = new BufferedReader(new FileReader(new File(Constants.PATH_OF_TOP_TERMS_FOR_CLUSTER)));
+			//Top terms of cluster are taken
+			while((line=brClusterTerms.readLine())!=null){
+				String arr[] = line.split(",");
+				ArrayList<String> termsArr = new ArrayList<String>();
+				for(i=1;i<arr.length;i++)
+					termsArr.add(arr[i]);
+				clusterToTerms.put(Integer.parseInt(arr[0]), termsArr);
+			}
+			brClusterTerms.close();
+		
+			//Clusterroterms store cluster number and corresponding terms.
+			  while (!s.equalsIgnoreCase("q")) { // quit if input is q;
+			    try{
+			    	setSynonymStr("");
+			      System.out.println("Enter the search query (q=quit):");
+			      s = br.readLine();
+			      System.out.println("Entered:"+s);
+			      if (s.equalsIgnoreCase("q")) {
+			        break;
+			      }
+			      
+			      String tokensS[] = s.split(" ");
+			      ArrayList<String> z = new ArrayList<String>(Arrays.asList(tokensS));
+			      
+			     
+			      arrSynStr = new ArrayList<String>();
+			      for(int j=0;j<tokensS.length;j++){
+			    	  arrSynStr.add("");
+			      }
+			      System.out.println("arrSynstr" + arrSynStr);
+			      
+			      
+			      ArrayList<WikiSynonym> arrWiki = new ArrayList<WikiSynonym>(); 
+			      for(int j=0;j<tokensS.length;j++){
+				      WikiSynonym w = new WikiSynonym(tokensS[j], this, j);
+				      arrWiki.add(w);
+			      }
+			      //System.out.println("arrWiki" + arrWiki);
+			      //System.in.read();
+			      for(WikiSynonym w : arrWiki)
+			    	  w.join();
+			      
+			      
+			     // s = s.concat(getSynonymStr());
+			      //System.out.println("s= " + s);
+			      
+			      ScoreDoc[] hits = null;
+			      //while(hits == null || hits.length==0){
+				      TopScoreDocCollector collector = TopScoreDocCollector.create(20, true);
+				      /*Query q1 = new QueryParser(Version.LUCENE_40, "contents", analyzer).parse();
+				    //  q.setBoost(5);
+				      Query q2 = new QueryParser(Version.LUCENE_40, "contents", analyzer).parse("cars");*/
+				      //q2.setBoost(1);
+				      
+				      BooleanQuery finalQuery= new BooleanQuery();
+				      for(int j=0;j<tokensS.length;j++)
+				      {
+				    	  System.out.println("Token" + tokensS[j]);
+				    	  Query q1 = new QueryParser(Version.LUCENE_42, "contents", analyzer).parse(tokensS[j]); //document contents are stored across this field
+						  q1.setBoost(1);
+						  System.out.println("q1"+q1);
+						  BooleanQuery intermediateQuery= new BooleanQuery();
+						  intermediateQuery.add(q1,BooleanClause.Occur.SHOULD);
+						  if(!arrSynStr.get(j).equals(""))
+						  {
+							  Query q2 = new QueryParser(Version.LUCENE_42, "contents", analyzer).parse(arrSynStr.get(j));
+					//		  System.out.println("q2"+q2);
+							  q2.setBoost(0.8f);
+							  intermediateQuery.add(q2,BooleanClause.Occur.SHOULD);
+						  }
+					      finalQuery.add(intermediateQuery,BooleanClause.Occur.SHOULD);
+				      }
+				      //After every iteration a word of given query is added to final query clause. 
+				      System.out.println(finalQuery);
+				      System.out.println("----");
+				      System.out.println(s.concat(synonymStr));
+				      System.out.println("^^^^^");
+				      System.out.println(arrSynStr);
+				      
+//				      
+				      Query finalQueryOld = new QueryParser(Version.LUCENE_42, "contents", analyzer).parse(s.concat(synonymStr));
+				      System.out.println("synonymstr"+ s.concat(synonymStr));
+				      //Search is done here.
+				      searcher.search(finalQuery, collector);
+				     
+				      //searcher.search(finalQueryOld, collector);
+				     
+				      hits = collector.topDocs().scoreDocs;
+				     
+		//		      system.out.println("Total Hits "+ collector.getTotalHits());
+		//	      }
+			      
+			      System.out.println("Found " + hits.length + " hits.");
+			      if(hits.length == 0)
+			      {
+			    	  String correctedString = SpellCheckTester.GetCorrection(s);
+			    	  if(correctedString.length() > 0)
+			    	  {
+			    		  System.out.println("Did you mean: ");
+			    		  System.out.println(correctedString);
+			    	  }
+			    	  else
+			    	  {
+			    		//System.out.println("0 Results Found");
+			    		System.out.println("No Spell Check Suggestions found");
+			    	  }
+			    	  continue;
+			      }
+			      float avg_val_2 =0.0f;
+			      float avg_val_5 =0.0f;
+			      float avg_val_10 =0.0f;
+			      for(i=0;i<hits.length;++i) {
+			        int docId = hits[i].doc;
+			        
+			        System.out.println(hits[i].score);
+			        if(i<2)
+			        avg_val_2 = avg_val_2 + hits[i].score;
+			        if(i<5)
+				        avg_val_5 = avg_val_5 + hits[i].score;
+			        if(i<10)
+				        avg_val_10 = avg_val_10 + hits[i].score;
+			        Document d = searcher.doc(docId);
+			        
+			        System.out.println((i + 1) + ". " + nameToIDMapping.get(d.get("filename")) + ":" + d.get("filename"));		// + ", score=" + hits[i].score);
+			      }
+			      avg_val_2 = avg_val_2/2;
+			      avg_val_5 = avg_val_5/5;
+			      avg_val_10 = avg_val_10/10;
+			      float prev = avg_val_2; 
+			      
+			      //all hits are printed here.
+			      System.out.println("avg value " + avg_val_2 + " "+ avg_val_5 + " " + avg_val_10);
+			    		  
+			      HashSet<Integer> previousClusterNumber = new HashSet<Integer>();
+		    	  HashMap<String,Integer> finalTerms=new HashMap<String,Integer>();
+		          ValueComparator bvc =  new ValueComparator(finalTerms);
+		          TreeMap<String,Integer> treeMapTerms = new TreeMap<String,Integer>(bvc);
+			      for(i=0;i<Constants.CONSIDER_TOP_N_RESULTS;i++)
+		    	  {
+				      if(i >= hits.length){
+				    	  break;
+				      }
+		    		  int docId = hits[i].doc;
+		    	      Document d = searcher.doc(docId);
+		    	      //Below if --- it checks if already visited cluster is again considered
+		    	      if(!previousClusterNumber.contains(docIdToClusterNumber.get(nameToIDMapping.get(d.get("filename")))))
+		    	    	{
+		    	    		  previousClusterNumber.add(docIdToClusterNumber.get(nameToIDMapping.get(d.get("filename"))));
+		    	    		  ArrayList<String> tokenComma = clusterToTerms.get(docIdToClusterNumber.get(nameToIDMapping.get(d.get("filename"))));
+		    	    		  //System.out.println(d.get("filename"));
+		    	    		  for(int l=0;l<tokenComma.size();l++)
+		    	    		  {
+		    	    			  String [] tokenColon = tokenComma.get(l).split(":");
+		    	    			//  System.out.println("token" +tokenComma.get(l));
+		    	    			//  System.in.read();
+
+//		    	    			  for(String s1 : arrSynStr)
+//		    	    			  {
+//			    	    			  if(s1.equalsIgnoreCase(tokenColon[0]))
+//		    	    				  {
+//		    	    					  wordAlreadyPresent = true;
+//		    	    					  break;
+//		    	    				  }
+//		    	    			  }
+//		    	    			  if(wordAlreadyPresent)
+//		    	    				  continue;
+		    	    			  boolean wordAlreadyPresent = false;
+		    	    			  for(String z1: z)
+		    	    			  {
+		    	    				  	if(z1.equalsIgnoreCase(tokenColon[0]))
+		    	    				  	{
+		    	    				  		wordAlreadyPresent = true;
+		    	    				  		break;
+		    	    				  	}
+		    	    			  }
+		    	    			  if(wordAlreadyPresent)
+		    	    			  {
+		    	    				  continue;
+		    	    			  }
+	    	    			  Integer fre = finalTerms.get(tokenColon[0]);
+	    	    			  int freqq = Integer.parseInt(tokenColon[1]);
+							  int totalFreq = 0;
+								if(fre == null)
+	    	    				  {
+									totalFreq  = freqq; 
+	    	    				  }
+		    	    			  else
+		    	    			  {
+		    	    				  totalFreq = fre+freqq+ Constants.SCORE_ADDITION_FOR_PRESENCE_IN_CLUSTER;
+		    	    				  //finalTerms.put(tokenColon[0],fre+Integer.parseInt(tokenColon[1])+ (Constants.SCORE_ADDITION_FOR_PRESENCE_IN_CLUSTER*(Constants.CONSIDER_TOP_N_RESULTS-i)));  
+		    	    			  }
+		    	    			 totalFreq  *= (Constants.CONSIDER_TOP_N_RESULTS-i);
+								 finalTerms.put(tokenColon[0],totalFreq);
+		    	    			}
+		    	    		  System.out.println("Terms for query expansion: "+ "Cluster No: "+ docIdToClusterNumber.get(nameToIDMapping.get(d.get("filename"))) +"\n" + clusterToTerms.get(docIdToClusterNumber.get(nameToIDMapping.get(d.get("filename")))).toString());
+		    	    		  //if(finalTerms.get(clusterToTerms.get(docIdToClusterNumber.get(nameToIDMapping.get(d.get("filename")))).toString())!=null)
+		    	    		  // It gives top terms in a cluster (obtained by taking the cluster number of top hit)
+		    	    	}
+		    	    		  
+		    	  }
+			      treeMapTerms.putAll(finalTerms);//used to print all top terms from each cluster when top CONSIDER_TOP_N_RESULTS results are considered.
+			      System.out.println("\n");
+			      
+			      System.out.println(treeMapTerms.toString());
+			       treeMapTerms.toString();
+			      //int ii;
+			      
+			     /* for(int j=0;j<tokensS.length;j++)
+			      {
+			    	  System.out.println("Token" + tokensS[j]);
+			    	  Query q1 = new QueryParser(Version.LUCENE_42, "contents", analyzer).parse(tokensS[j]); //document contents are stored across this field
+					  q1.setBoost(1);
+					  System.out.println("q1"+q1);
+					  BooleanQuery intermediateQuery= new BooleanQuery();
+					  intermediateQuery.add(q1,BooleanClause.Occur.SHOULD);
+					  if(!arrSynStr.get(j).equals(""))
+					  {
+						  Query q2 = new QueryParser(Version.LUCENE_42, "contents", analyzer).parse(arrSynStr.get(j));
+				//		  System.out.println("q2"+q2);
+						  q2.setBoost(0.8f);
+						  intermediateQuery.add(q2,BooleanClause.Occur.SHOULD);
+					  }
+				      finalQuery.add(intermediateQuery,BooleanClause.Occur.SHOULD);
+			      }*/
+			      
+			      /*for (Map.Entry<String, Integer> eeeeee : treeMapTerms.entrySet())
+			      {
+			    	  float  avg_val_cal=0.0f;
+			    	  BooleanQuery NewQuery= new BooleanQuery();
+			    	  NewQuery.add(finalQuery,BooleanClause.Occur.SHOULD);
+			    	  Query q1 = new QueryParser(Version.LUCENE_42, "contents", analyzer).parse(eeeeee.getKey());
+			    	  q1.setBoost(1);
+					  System.out.println("q1"+q1);
+					  BooleanQuery intermediateQuery= new BooleanQuery();
+					  intermediateQuery.add(q1,BooleanClause.Occur.SHOULD);
+					  NewQuery.add(intermediateQuery,BooleanClause.Occur.SHOULD);
+					  TopScoreDocCollector collector1 = TopScoreDocCollector.create(20, true);
+					  searcher.search(NewQuery, collector1);
+					     
+				      //searcher.search(finalQueryOld, collector);
+				     
+				      hits = collector1.topDocs().scoreDocs;
+				      for(i=0;i<hits.length;++i) {
+					        int docId = hits[i].doc;
+					        
+					        //System.out.println(hits[i].score);
+					        if(i<2)
+					        avg_val_cal =  (avg_val_cal + hits[i].score);
+					      }
+				      System.out.println("avg_val" + avg_val_cal/2);
+				      if(avg_val_cal/2>prev){prev= avg_val_cal;finalQuery.add(intermediateQuery,BooleanClause.Occur.SHOULD);System.out.println(finalQuery +"---- "+ avg_val_cal);}
+				      
+			      }
+			      
+			      
+			    }*/
+			    catch (Exception e) {
+			      System.out.println("Error searching " + s + " : " + e.getMessage());
+			    }
+			}
+	}
+
+	public synchronized void storeSynonyms(JSONArray jsonArr, int index){
+		if(jsonArr!=null){
+	        Iterator iterator = jsonArr.iterator();
+	       // while (iterator.hasNext()) {
+	        	JSONObject term = (JSONObject)iterator.next();
+	            synonymStr = synonymStr.concat(" ");
+	            arrSynStr.add(index, (String)term.get("term"));
+	            synonymStr = synonymStr.concat((String)term.get("term"));
+     //  }
+		}
+	}
+}
+//weapon ganguly ghosh musharraf bihar
+
+// 1. bush usa
+// 2. sachin
+// 3. musharraf
+// 4. maharashtra
+
+class ValueComparator implements Comparator<String> {
+
+    Map<String, Integer> base;
+    public ValueComparator(Map<String, Integer> base) {
+        this.base = base;
+    }
+
+    // Note: this comparator imposes orderings that are inconsistent with equals.  
+    @Override
+    public int compare(String a, String b) {
+        if (base.get(a) >= base.get(b)) {
+            return -1;
+        } else {
+            return 1;
+        } // returning 0 would merge keys
+    } 
+}

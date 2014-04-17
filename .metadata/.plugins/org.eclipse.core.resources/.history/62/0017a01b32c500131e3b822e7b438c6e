@@ -1,0 +1,244 @@
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.DataInputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import org.apache.lucene.document.Document;
+import org.apache.lucene.document.Field.Store;
+import org.apache.lucene.index.DirectoryReader;
+import org.apache.lucene.index.IndexReader;
+import org.apache.lucene.index.IndexWriter;
+import org.apache.lucene.index.Terms;
+import org.apache.lucene.index.TermsEnum;
+import org.apache.lucene.store.FSDirectory;
+import org.apache.lucene.util.BytesRef;
+import com.google.common.collect.Ordering;
+import com.google.common.collect.TreeMultimap;
+
+public class ClusterTags {
+	public static void addDocument(IndexWriter writer, String f)
+			throws IOException {
+		Document doc = new Document();
+		FileReader fr = new FileReader(f);
+		BufferedReader br = new BufferedReader(fr, 30000);
+		doc.add(new VecTextField("Content", br, Store.NO));
+		writer.addDocument(doc);
+	}
+
+	public static void main(String[] args) throws NumberFormatException,
+			IOException {
+		HashMap<Integer, Integer> docIdToClusterNumber = new HashMap<Integer, Integer>(); //docid to clusterno
+		HashMap<Integer, ArrayList<Integer>> clusterNoToDocIds = new HashMap<Integer, ArrayList<Integer>>(); // clusterno to docids
+		HashMap<Integer, Integer> ourIDToInternalID = new HashMap<Integer, Integer>(); // ourid to internalid
+		
+		System.out.println(Constants.PATH_OF_CLUSTER_FILE);
+		BufferedReader brCluster = new BufferedReader(new FileReader(new File(Constants.PATH_OF_CLUSTER_FILE)));
+		System.out.println("Here2");
+		//
+		String line = "";
+		int i = 1;
+		while ((line = brCluster.readLine()) != null) {
+			Integer clusterNumber = Integer.parseInt(line);
+			ArrayList<Integer> arr = clusterNoToDocIds.get(clusterNumber);
+			if (arr != null) {
+				arr.add(i);
+				clusterNoToDocIds.put(clusterNumber, arr);
+			} else {
+				arr = new ArrayList<Integer>();
+				arr.add(i);
+				clusterNoToDocIds.put(clusterNumber, arr);
+
+			}
+			docIdToClusterNumber.put(i, clusterNumber);
+			i++;
+		}
+		// clusterno and corresponding array of docids. 
+		System.out.println("Here1");
+		brCluster.close();
+
+		Map<Integer, String> IdToNameMapping = new HashMap<Integer, String>();
+		BufferedReader mappingFile = new BufferedReader(new FileReader(
+				new File(Constants.PATH_OF_MAPPING_FILE)));
+
+		while ((line = mappingFile.readLine()) != null) {
+			String[] parts = line.split(",");
+			int num = Integer.parseInt(parts[0]);
+			IdToNameMapping.put(num, parts[1]);
+		}
+       // each id is mapped to file name.
+		
+		HashSet<String> stopWordsHM = new HashSet<String>();
+		try{
+			FileInputStream fstream = new FileInputStream("src/StopWords.txt");
+			DataInputStream in = new DataInputStream(fstream);			
+	    	BufferedReader br = new BufferedReader(new InputStreamReader(in));
+	    	String strLine;
+	    	while ((strLine = br.readLine()) != null) {
+	    		stopWordsHM.add(strLine);
+	    	}
+	    	in.close();
+		}
+		catch(Exception e)
+		{
+			System.out.println("File for stop words not found");
+		}
+		
+		//Stopwords are added to stopWordsHM
+		
+		int noOfClusters = clusterNoToDocIds.size();
+		BufferedWriter bw = new BufferedWriter(new FileWriter(new File(Constants.PATH_OF_TOP_TERMS_FOR_CLUSTER)));
+		BufferedWriter dbug = new BufferedWriter(new FileWriter(new File(Constants.PATH_OF_DEBUG_LOG)));
+		
+		IndexReader reader = DirectoryReader.open(FSDirectory
+				.open(new File(
+						Constants.PATH_OF_TERM_VECTOR_INDEX_FILES)));
+		// All input doc saved with fields and corresponding content.
+		
+		System.out.println("reader.numDocs()" + reader.numDocs());
+		System.out.println("11reader.maxDoc()" + reader.maxDoc());
+		
+		for(int i1=0;i1<reader.maxDoc();i1++)
+		{
+			Document d = reader.document(i1);
+			int ID = Integer.parseInt(d.get("DocID"));
+			System.out.println("ID"+ID);
+            ourIDToInternalID.put(ID, i1);				
+//			Terms vector = reader.getTermVector(i, "Content");
+//			TermsEnum termsEnum = null;
+//			termsEnum = vector.iterator(termsEnum);
+//			BytesRef text = null;
+//			//dbug.write();
+//			while ((text = termsEnum.next()) != null) {
+//				System.out.println((text.utf8ToString()+ " "));
+//			}
+//			dbug.newLine();
+//			dbug.flush();
+//			 
+		}// docid given as field in reader(individualindex) mapped to our normal id.
+		
+		Stemmer stemmer = new Stemmer();
+		
+		for (int clusterNumber = 0; clusterNumber < noOfClusters; clusterNumber++) {
+			Map<String, Integer> frequencies = new HashMap<String, Integer>();
+			Map<String, Integer> inversefrequencies = new HashMap<String, Integer>();
+			
+			HashMap<String,String> stemToWord = new HashMap<String,String>();
+			System.out.println("docs in a cluster" + clusterNoToDocIds.get(clusterNumber).size());
+			int szz = clusterNoToDocIds.get(clusterNumber).size();
+			
+			for (Integer docInCluster : clusterNoToDocIds.get(clusterNumber)) {
+				//every doc in a cluster.
+				
+				System.out.println(docInCluster);
+				
+				Terms terms = reader.getTermVector(ourIDToInternalID.get(docInCluster), "Content");
+				
+				//check what is stored in  terms
+				
+				//dbug.write("DOCINCLUSTER = "+docInCluster);
+				dbug.write("ourIDToInternalID.get(docInCluster) = "+ourIDToInternalID.get(docInCluster));
+				TermsEnum termsEnum = null;
+				
+				termsEnum = terms.iterator(termsEnum);
+				//System.out.println("sizeof docs" +docInCluster + ":" + terms.getSumDocFreq() + " " + termsEnum.docFreq());
+				//termsEnum steps through all terms in a doc.
+				int totaldocfreq = (int) terms.getSumDocFreq();
+				BytesRef text = null;
+				while ((text = termsEnum.next()) != null) {
+					//System.out.println(text);
+					int freq = (int) (termsEnum.totalTermFreq());
+					//termsEnum.
+					
+					String textString = text.utf8ToString();
+					
+					dbug.write("t=" + textString + " f=" + freq+ " ");
+					// System.out.println("term = " + term + " freq = " + freq);
+					
+					stemmer.add(textString.toCharArray(),textString.length());
+					stemmer.stem();
+					String stemmedVersion = stemmer.toString();
+					String originalWord = stemToWord.get(stemmedVersion);
+					if(originalWord != null){
+						
+						textString = originalWord;
+					}
+					else{
+						//textString = stemmer.toString();
+						stemToWord.put(stemmer.toString(),textString);
+					}
+					if(stopWordsHM.contains(textString)){
+						continue;
+					}
+					if(textString.length()<3)
+						continue;
+					try{
+						String checkString = textString.charAt(0) + "";
+						
+						
+					    Float.parseFloat(checkString);
+					}
+					catch (Exception e) {
+						// TODO: handle exception
+						//frequencies of terms over different docs is calculated here.
+						if (frequencies.get(textString) != null) {
+							
+							//if(textString == "background"){
+							//if(freq>1){
+								
+							//}//}
+							inversefrequencies.put(textString,frequencies.get(textString) + 1 );
+							frequencies.put(textString, frequencies.get(textString) + freq +1 );
+						} else {
+							inversefrequencies.put(textString,1);
+							frequencies.put(textString, freq + 1);
+						}
+					}
+					
+				}
+				//System.in.read();
+			}
+			TreeMultimap<Integer, String> freqToTerm = TreeMultimap.create(Ordering.natural().reverse(), Ordering.natural()); //TODO: USE Tf-Idf instead of Tf
+			//TreeMultimap is used to order key,value pairs
+			
+			for (Map.Entry<String, Integer> eeeeee : frequencies.entrySet()) {
+				freqToTerm.put((int) (eeeeee.getValue()*(1+Math.log(szz/inversefrequencies.get(eeeeee.getKey())))), eeeeee.getKey());
+			}
+			System.out.println("clusterNo = " + clusterNumber);
+			bw.write(new Integer(clusterNumber).toString());
+			
+			int clusterSize = (clusterNoToDocIds.get(clusterNumber).size());
+			dbug.write(new Integer(clusterNumber).toString() + ",");
+			dbug.write("Size = "+new Integer(clusterSize).toString() + " - ");
+			for(Integer docID : clusterNoToDocIds.get(clusterNumber))
+			{
+				dbug.write(new Integer(docID).toString() + ",");
+			}
+			i = 0;
+			
+			for (Map.Entry<Integer, String> e : freqToTerm.entries()) {
+				if(i > Constants.TOP_K_TERMS_IN_CLUSTER)
+					break;
+				dbug.write(","+e.getValue() + "("+e.getKey()+")");
+				bw.write(","+e.getValue()+":"+e.getKey());
+				i++;
+			}
+			//We pick most frequent TOP_K_TERMS_IN_CLUSTER per cluster and store along with their frequencies.
+			
+			bw.newLine();
+			dbug.newLine();
+		}
+        bw.close();
+        dbug.close();
+
+
+	}
+
+}
